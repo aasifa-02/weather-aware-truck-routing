@@ -162,7 +162,7 @@ function CheckpointPopup({ route, cp }: { route: RouteOption; cp: Checkpoint }) 
             <tr>
               <td>Wind</td>
               <td>
-                {w.wind_mph.toFixed(0)} mph <small>(gusts {w.gust_mph.toFixed(0)})</small>
+                {w.wind_mph.toFixed(0)} mph{w.gust_mph !== null && <small> (gusts {w.gust_mph.toFixed(0)})</small>}
               </td>
               <td>{cp.condition_risk && RISK_LABEL[cp.condition_risk.wind]}</td>
             </tr>

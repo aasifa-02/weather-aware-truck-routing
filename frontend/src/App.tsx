@@ -125,7 +125,8 @@ export default function App() {
           </section>
         )}
         <footer className="muted small">
-          Routing © OSRM / OpenStreetMap · Geocoding Nominatim / Photon · Forecasts Open-Meteo
+          Routing © OSRM / OpenStreetMap · Geocoding Nominatim / Photon · Forecasts{' '}
+          {plan ? SOURCE_LABEL[plan.weather_source] : 'Open-Meteo (MET Norway as backup)'}
         </footer>
       </aside>
       <main className="map-pane">
@@ -161,6 +162,12 @@ export default function App() {
       </main>
     </div>
   )
+}
+
+const SOURCE_LABEL: Record<Plan['weather_source'], string> = {
+  'open-meteo': 'Open-Meteo',
+  'met-norway': 'MET Norway (backup source)',
+  'browser-open-meteo': 'Open-Meteo, fetched by your browser',
 }
 
 function shortName(name: string): string {

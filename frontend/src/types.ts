@@ -9,7 +9,7 @@ export interface Place {
 
 export interface CheckpointWeather {
   wind_mph: number
-  gust_mph: number
+  gust_mph: number | null
   rain_in_hr: number
   snow_in_hr: number
   temp_c: number | null
@@ -63,6 +63,7 @@ export interface Plan {
   recommended_route_id: string
   routes: RouteOption[]
   warnings: string[]
+  weather_source: WeatherSource
 }
 
 export interface TripInput {
@@ -90,6 +91,9 @@ export interface Heatmap {
   hours: string[]
   grid: { nx: number; ny: number; bounds: { south: number; west: number; north: number; east: number } }
   cells: HeatCell[]
+  weather_source: WeatherSource
 }
 
 export type HeatMetric = 'risk' | 'wind' | 'rain' | 'snow'
+
+export type WeatherSource = 'open-meteo' | 'met-norway' | 'browser-open-meteo'
