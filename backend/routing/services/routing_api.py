@@ -23,7 +23,7 @@ from .geo import (
     haversine_mi,
     resample,
 )
-from .http import UpstreamError, get_json
+from .http import RateLimited, UpstreamError, get_json
 
 logger = logging.getLogger(__name__)
 
@@ -55,7 +55,24 @@ def _osrm(points: list[LatLng], alternatives: bool) -> list[dict]:
         "steps": "true",  # needed for the leg summaries (main road names)
         "alternatives": "3" if alternatives else "false",
     }
-    data = get_json("osrm", f"{settings.OSRM_URL}/route/v1/driving/{coords}", params, ttl=60 * 60 * 24)
+    data = None
+    last_exc: UpstreamError | None = None
+    # The public OSRM demo first, then the FOSSGIS OSRM mirror (same API) if the demo is
+    # rate limiting or down. A real "no route" (HTTP 400) is final and not retried elsewhere.
+    for name, base in (("osrm", settings.OSRM_URL), ("osrm-fossgis", settings.OSRM_FALLBACK_URL)):
+        if not base:
+            continue
+        try:
+            data = get_json(name, f"{base}/route/v1/driving/{coords}", params, ttl=60 * 60 * 24)
+            break
+        except UpstreamError as exc:
+            if _is_final(exc):
+                body_msg = exc.reason.split(":", 1)[-1].strip()
+                raise RoutingError(body_msg or "No drivable route found.") from exc
+            logger.warning("Routing via %s failed: %s", name, exc)
+            last_exc = exc
+    if data is None:
+        raise last_exc or UpstreamError("osrm", "no routing server configured")
     if data.get("code") != "Ok":
         raise RoutingError(data.get("message") or f"Routing failed ({data.get('code')}).")
     # Drop the bulky turn-by-turn steps right away; we only keep what we use.
@@ -107,6 +124,11 @@ def trim_spur(line: TimedPolyline, via_index: int) -> TimedPolyline:
     seg = secs[:i] + [bridge_mi / 45 * 3600] + secs[j:]
     removed = (line.miles[j] - line.miles[i]) - bridge_mi
     return build_timed_polyline(coords, seg, line.total_miles - removed, sum(seg))
+
+
+def _is_final(exc: UpstreamError) -> bool:
+    """4xx other than 429 means the request itself is bad (e.g. no route), not a server problem."""
+    return exc.reason.startswith("HTTP 4") and not isinstance(exc, RateLimited)
 
 
 def _to_option(route: dict, source: str) -> RouteOption:
