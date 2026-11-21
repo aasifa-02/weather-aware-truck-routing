@@ -92,8 +92,17 @@ NOMINATIM_URL = os.environ.get("NOMINATIM_URL", "https://nominatim.openstreetmap
 PHOTON_URL = os.environ.get("PHOTON_URL", "https://photon.komoot.io/api/")
 OSRM_URL = os.environ.get("OSRM_URL", "https://router.project-osrm.org")
 OPEN_METEO_URL = os.environ.get("OPEN_METEO_URL", "https://api.open-meteo.com/v1/forecast")
+# URL the *browser* uses for the last-resort client-side weather fetch.
+OPEN_METEO_PUBLIC_URL = os.environ.get("OPEN_METEO_PUBLIC_URL", "https://api.open-meteo.com/v1/forecast")
+MET_NORWAY_URL = os.environ.get("MET_NORWAY_URL", "https://api.met.no/weatherapi/locationforecast/2.0/compact")
+OSRM_FALLBACK_URL = os.environ.get("OSRM_FALLBACK_URL", "https://routing.openstreetmap.de/routed-car")
+WEATHER_PRIMARY_ENABLED = env_bool("WEATHER_PRIMARY_ENABLED", True)
+WEATHER_FALLBACK_ENABLED = env_bool("WEATHER_FALLBACK_ENABLED", True)
+# Client-side weather uploads for the heatmap can be ~1-2 MB of JSON.
+DATA_UPLOAD_MAX_MEMORY_SIZE = 8 * 1024 * 1024
 HTTP_USER_AGENT = os.environ.get(
-    "HTTP_USER_AGENT", "WeatherAwareTruckRouting/1.0 (+https://rnatech.in; contact aasifa@rnatech.in)"
+    "HTTP_USER_AGENT",
+    "WeatherAwareTruckRouting/1.0 (+https://github.com/aasifa-02/weather-aware-truck-routing; aasifa@rnatech.in)",
 )
 HTTP_TIMEOUT = float(os.environ.get("HTTP_TIMEOUT", "20"))
 

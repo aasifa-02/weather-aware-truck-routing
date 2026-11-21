@@ -19,9 +19,10 @@ from .risk import classify_conditions
 HOURS = 48
 CORRIDOR_MI = 60
 PAD_DEG = 1.0
-TARGET_CELLS_LONG_SIDE = 32
+TARGET_CELLS_LONG_SIDE = 28
 MIN_STEP_DEG = 0.15
-MAX_CELLS = 600
+MAX_CELLS = 450
+FALLBACK_MAX_POINTS = 120  # MET Norway is one request per point
 
 
 class HeatmapError(Exception):
@@ -83,10 +84,10 @@ def build_grid(routes: list[list[LatLng]]):
     return bounds, nx, ny, cells
 
 
-def build_heatmap(plan_id: str) -> dict:
+def build_heatmap(plan_id: str, client_weather: dict | None = None) -> dict:
     cache_key = f"heatmap:{plan_id}"
     hit = cache.get(cache_key)
-    if hit:
+    if hit and client_weather is None:
         return hit
     plan = cache.get(f"plan:{plan_id}")
     if not plan:
@@ -99,10 +100,16 @@ def build_heatmap(plan_id: str) -> dict:
     end = start + timedelta(hours=HOURS)
 
     bounds, nx, ny, cells = build_grid(plan["routes"])
-    try:
-        forecasts = weather.fetch_forecasts([(lat, lng) for _, _, lat, lng in cells], start, end)
-    except weather.WeatherError as exc:
-        raise HeatmapError(str(exc)) from exc
+    points = [(lat, lng) for _, _, lat, lng in cells]
+    if client_weather is not None:
+        try:
+            forecasts = weather.forecasts_from_client(client_weather)
+        except weather.WeatherError as exc:
+            raise HeatmapError(str(exc)) from exc
+        source = weather.SOURCE_CLIENT
+    else:
+        # WeatherUnavailable propagates so the view can hand the fetch to the browser.
+        forecasts, source = weather.fetch_forecasts(points, start, end, fallback_max_points=FALLBACK_MAX_POINTS)
 
     hours = [(start + timedelta(hours=h)) for h in range(HOURS + 1)]
     keys = [weather.Forecast.hour_key(t) for t in hours]
@@ -110,7 +117,7 @@ def build_heatmap(plan_id: str) -> dict:
 
     out_cells = []
     for i, j, lat, lng in cells:
-        f = forecasts.get((round(lat, 2), round(lng, 2)))
+        f = forecasts.get(weather.round_point((lat, lng)))
         wind, rain, snow, risk = [], [], [], []
         for k in keys:
             wx = f.at_key(k) if f else None
@@ -130,6 +137,7 @@ def build_heatmap(plan_id: str) -> dict:
         "hours": [t.isoformat() for t in hours],
         "grid": {"nx": nx, "ny": ny, "bounds": {k: round(v, 5) for k, v in bounds.items()}},
         "cells": out_cells,
+        "weather_source": source,
     }
     cache.set(cache_key, result, 60 * 60)
     return result

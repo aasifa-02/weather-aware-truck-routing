@@ -39,7 +39,7 @@ def _fake_lookup(forecasts, point, when):
 
 
 @mock.patch.object(weather, "lookup", side_effect=_fake_lookup)
-@mock.patch.object(weather, "fetch_forecasts", return_value={})
+@mock.patch.object(weather, "fetch_forecasts", return_value=({}, "open-meteo"))
 @mock.patch.object(routing_api, "get_route_options")
 @mock.patch.object(geocoding, "geocode")
 def test_plan_recommends_safest_route(m_geo, m_routes, _m_fetch, _m_lookup):

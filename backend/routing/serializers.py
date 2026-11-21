@@ -11,6 +11,8 @@ class TripRequestSerializer(serializers.Serializer):
     departure = serializers.DateTimeField(help_text="ISO 8601 with UTC offset, e.g. 2026-11-21T08:00:00-06:00")
     load_lb = serializers.FloatField(min_value=0, max_value=200_000)
     interval_mi = serializers.ChoiceField(choices=INTERVAL_CHOICES, default=25)
+    # Last-resort path: Open-Meteo data the browser fetched itself (validated in weather.py).
+    client_weather = serializers.JSONField(required=False)
 
     def validate_departure(self, value):
         if value.tzinfo is None:  # treat naive times as UTC rather than guessing a zone

@@ -34,6 +34,7 @@ class TripRequest:
     departure: datetime  # timezone-aware
     load_lb: float
     interval_mi: float = 25
+    client_weather: dict | None = None  # Open-Meteo data fetched by the browser (last resort)
 
 
 def plan_trip(req: TripRequest) -> dict:
@@ -64,13 +65,17 @@ def plan_trip(req: TripRequest) -> dict:
             "Pick a departure time between now and two weeks out."
         )
 
-    # One batched weather fetch for every checkpoint on every route.
-    try:
-        forecasts = weather.fetch_forecasts(
-            [pos for pts in sampled for _, pos, _ in pts], req.departure, last_eta
-        )
-    except weather.WeatherError as exc:
-        raise PlanError(str(exc)) from exc
+    # One batched weather fetch for every checkpoint on every route. WeatherUnavailable
+    # propagates to the view, which asks the browser to fetch the data instead.
+    points = [pos for pts in sampled for _, pos, _ in pts]
+    if req.client_weather is not None:
+        try:
+            forecasts = weather.forecasts_from_client(req.client_weather)
+        except weather.WeatherError as exc:
+            raise PlanError(str(exc)) from exc
+        source = weather.SOURCE_CLIENT
+    else:
+        forecasts, source = weather.fetch_forecasts(points, req.departure, last_eta)
 
     routes, rank_inputs = [], []
     for idx, (opt, pts) in enumerate(zip(options, sampled)):
@@ -144,6 +149,11 @@ def plan_trip(req: TripRequest) -> dict:
         warnings.append("Every route crosses No Travel conditions at this departure time. Consider delaying the trip.")
     elif best.summary.severe_miles > 0:
         warnings.append("The recommended route still has Severe-risk miles. Check conditions before departing.")
+    if source == weather.SOURCE_MET_NORWAY:
+        warnings.append(
+            "Forecasts came from the backup source (MET Norway) because the main weather service is busy. "
+            "Gust data isn't available from it."
+        )
     if len(routes) < 3:
         warnings.append(f"Only {len(routes)} distinct route(s) could be found for this trip.")
 
@@ -168,4 +178,5 @@ def plan_trip(req: TripRequest) -> dict:
         "recommended_route_id": best.route_id,
         "routes": routes,
         "warnings": warnings,
+        "weather_source": source,
     }
