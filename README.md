@@ -72,7 +72,8 @@ Environment variables (all optional except the secret key in production):
 | `CORS_ALLOWED_ORIGINS` | `http://localhost:5173` | Only needed if the frontend is hosted on another domain |
 | `VITE_API_BASE` (build time) | empty (same origin) | API URL when the frontend is hosted separately |
 | `CACHE_DIR` | `backend/.cache` | File cache location |
-| `OSRM_URL`, `NOMINATIM_URL`, `PHOTON_URL`, `OPEN_METEO_URL` | public endpoints | Point to self-hosted instances if needed |
+| `OSRM_URL`, `OSRM_FALLBACK_URL`, `NOMINATIM_URL`, `PHOTON_URL`, `OPEN_METEO_URL`, `MET_NORWAY_URL` | public endpoints | Point to self-hosted instances if needed |
+| `WEATHER_PRIMARY_ENABLED`, `WEATHER_FALLBACK_ENABLED` | `true` | Turn Open-Meteo or MET Norway off (useful for testing the fallbacks) |
 
 ## Architecture
 
@@ -92,11 +93,11 @@ backend/ (Django 6 + Django REST Framework)
     geocoding.py              Nominatim, with Photon as a fallback; also accepts "lat,lng"
     routing_api.py            OSRM routes + via-point alternatives + spur trimming
     geo.py                    haversine, timed polyline (distance + ETA per vertex), sampling, RDP
-    weather.py                Open-Meteo batched hourly forecasts + unit conversion
+    weather.py                weather provider chain (Open-Meteo → MET Norway → browser), unit conversion
     risk.py                   pure risk classification, route summary, ranking, explanation
     planner.py                orchestrates one trip plan
     heatmap.py                corridor grid + 48 h forecast for the heatmap
-    http.py                   cached GET with retries and per-host rate limiting
+    http.py                   cached GET: retries, Retry-After handling, per-host rate limiting
 ```
 
 ### API
@@ -125,14 +126,45 @@ grid loads in the background.
 | Need | Service | Why |
 |---|---|---|
 | Geocoding | **Nominatim** (OSM), with **Photon** as a fallback | Free and keyless; requests are rate-limited to Nominatim's 1 request/second policy and sent with a proper User-Agent |
-| Routing | **OSRM** public server (`alternatives=3`, `annotations=duration`) | Keyless, fast, and gives per-segment durations for accurate checkpoint ETAs |
-| Weather | **Open-Meteo** forecast API | Keyless and hourly up to 16 days ahead; it accepts many coordinates per request, so one call covers ~100 checkpoints |
+| Routing | **OSRM** public server (`alternatives=3`, `annotations=duration`), with the FOSSGIS OSRM mirror as a backup | Keyless, fast, and gives per-segment durations for accurate checkpoint ETAs |
+| Weather | **Open-Meteo** forecast API, with **MET Norway** Locationforecast as a backup | Both keyless. Open-Meteo is hourly up to 16 days ahead and takes ~100 coordinates per request. MET Norway is global and works from datacenter IPs |
 | Map tiles | CARTO Voyager (OpenStreetMap data) | Free, keyless basemap with attribution; the OSM tile server blocks production apps that use it as a CDN |
 
 **Caching.** Every upstream GET goes through a Django file cache, which is shared by
 gunicorn workers. Lifetimes are geocodes 30 days, routes 24 h and forecasts 1 h. Heatmaps
 are cached for 1 h and plans for 6 h. Coordinates are rounded to 0.01° (~1 km, finer than
 the forecast models) to improve cache hits, and duplicate points are fetched once.
+
+### Staying up when a free API rate-limits
+
+Free APIs rate-limit shared cloud IPs (on Render, Open-Meteo returned HTTP 429), so every
+external call has a fallback:
+
+| Service | If it fails or rate-limits |
+|---|---|
+| Open-Meteo (weather) | It's put on a **cool-down** (its `Retry-After`, or 15 min), and **MET Norway** is used instead. If MET also fails, the **browser fetches Open-Meteo itself** (see below). |
+| OSRM demo (routing) | The same request goes to the **FOSSGIS OSRM mirror** (`routing.openstreetmap.de`). A real "no route" answer is final. |
+| Nominatim (geocoding) | **Photon** is used instead. |
+
+* **Retry-After.** A 429 with a short `Retry-After` (≤ 3 s) is waited out and retried once.
+  A longer one, or none, fails fast so the next source is tried at once. Network errors and
+  5xx responses are retried with backoff. Failures are never cached.
+* **MET Norway** gives one point per request. Checkpoints are merged onto a coarser grid
+  (≥ 0.1°, at most 80 requests per plan and 120 per heatmap) and fetched in parallel within
+  MET's rate limit. Its data is converted into Open-Meteo's hourly layout:
+  * wind m/s → mph, interpolated over its 6-hourly steps after about 2.5 days;
+  * `next_1_hours` precipitation is shifted to "hour ending at T";
+  * because MET has no snowfall field, precipitation is split by temperature: snow at
+    ≤ 0 °C, rain at ≥ 2 °C, linear in between, with Open-Meteo's 1 mm → 0.7 cm snow ratio.
+  
+  This means the **same unit conversion and risk code** runs on it. MET has no gusts, so
+  popups leave them out, and the UI says when the backup source was used.
+* **Browser fallback.** If every server-side source fails, the API answers **503** with
+  `code: "weather_unavailable"` and a `weather_request`: the exact Open-Meteo URL,
+  parameters and points. The frontend makes that call from the user's own connection and
+  re-sends the trip with `client_weather` (for the heatmap, it POSTs to
+  `/api/heatmap/<id>/`). The server validates the data and scores it with the same code,
+  so the result is labelled "fetched by your browser" but is otherwise identical.
 
 ### Getting three routes
 
@@ -193,8 +225,8 @@ example *"Fewer Severe miles than Route B (0 vs 40 mi); similar weather risk as 
 ## Heatmap
 
 * The backend builds a grid over the bounding box of all routes. The grid is spaced evenly
-  in Web-Mercator, about 32 cells on the long side and at least 0.15° per cell. It keeps
-  only cells within **60 miles of any route** (the trip corridor), up to 600 cells.
+  in Web-Mercator, about 28 cells on the long side and at least 0.15° per cell. It keeps
+  only cells within **60 miles of any route** (the trip corridor), up to 450 cells.
 * Open-Meteo is called once (batched) for hours 0–48 from departure. The response holds
   every hour, so **the slider never refetches**.
 * The browser renders each of the 49 hours to a small PNG, then upscales it with
@@ -217,9 +249,10 @@ example *"Fewer Severe miles than Route B (0 vs 40 mi); similar weather risk as 
 * Forecasts reach about 15 days ahead, so departures outside that window are rejected
   with a clear message. Checkpoints without forecast data count as Low and are flagged on
   the route card.
-* The public OSRM, Nominatim and Open-Meteo services have fair-use limits. Caching and
-  batching keep a typical plan to about 3–8 routing calls, 2 geocodes and 2–4 weather
-  calls (plus about 6 for the heatmap). For heavy use, point the `*_URL` settings at
+* The public OSRM, Nominatim, Open-Meteo and MET Norway services have fair-use limits
+  (fallbacks are described above). Caching and batching keep a typical plan to about
+  3–8 routing calls, 2 geocodes and 1–3 Open-Meteo weather
+  calls (plus up to 5 for the heatmap). For heavy use, point the `*_URL` settings at
   self-hosted or paid instances.
 * Coverage is the US, Canada and Mexico (geocoding is restricted to those countries to
   avoid ambiguous matches).
