@@ -127,7 +127,7 @@ grid loads in the background.
 | Geocoding | **Nominatim** (OSM), with **Photon** as a fallback | Free and keyless; requests are rate-limited to Nominatim's 1 request/second policy and sent with a proper User-Agent |
 | Routing | **OSRM** public server (`alternatives=3`, `annotations=duration`) | Keyless, fast, and gives per-segment durations for accurate checkpoint ETAs |
 | Weather | **Open-Meteo** forecast API | Keyless and hourly up to 16 days ahead; it accepts many coordinates per request, so one call covers ~100 checkpoints |
-| Map tiles | OpenStreetMap | Standard attribution-based tiles |
+| Map tiles | CARTO Voyager (OpenStreetMap data) | Free, keyless basemap with attribution; the OSM tile server blocks production apps that use it as a CDN |
 
 **Caching.** Every upstream GET goes through a Django file cache, which is shared by
 gunicorn workers. Lifetimes are geocodes 30 days, routes 24 h and forecasts 1 h. Heatmaps
